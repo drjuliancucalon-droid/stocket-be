@@ -1,0 +1,9 @@
+name = "stocket-be"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "stocket"
+database_id = "REEMPLAZA-CON-TU-DATABASE-ID"
