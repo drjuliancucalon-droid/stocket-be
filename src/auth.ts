@@ -1,14 +1,14 @@
-// JWT implementado con Web Crypto (sin dependencias) — compatible con Cloudflare Workers
+// JWT HS256 implementado con Web Crypto API nativa
+// Compatible con Cloudflare Workers runtime (sin dependencias externas)
 
-export interface JwtPayload {
+export type JwtPayload = {
   sub: string;
   email: string;
-  org_id?: string;
-  org_role?: string;
-  is_super_admin?: boolean;
+  org_id: string;
+  org_role: 'admin' | 'member';
+  is_super_admin: boolean;
   exp: number;
-  iat: number;
-}
+};
 
 function base64url(input: ArrayBuffer | string): string {
   const bytes =
@@ -27,9 +27,9 @@ function base64urlDecode(input: string): Uint8Array {
   const padded =
     input.replace(/-/g, '+').replace(/_/g, '/') +
     '==='.slice((input.length + 3) % 4);
-  const binary = atob(padded);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const raw = atob(padded);
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
   return bytes;
 }
 
@@ -44,17 +44,23 @@ async function hmacKey(secret: string): Promise<CryptoKey> {
 }
 
 export async function signJwt(
-  payload: Omit<JwtPayload, 'exp' | 'iat'>,
+  payload: Omit<JwtPayload, 'exp'>,
   secret: string,
-  expiresInSeconds = 60 * 60 * 24 * 7 // 7 días
+  expiresInSeconds = 60 * 60 * 24 * 7
 ): Promise<string> {
-  const now = Math.floor(Date.now() / 1000);
-  const full: JwtPayload = { ...payload, iat: now, exp: now + expiresInSeconds };
   const header = { alg: 'HS256', typ: 'JWT' };
+  const full: JwtPayload = {
+    ...payload,
+    exp: Math.floor(Date.now() / 1000) + expiresInSeconds,
+  };
   const data = `${base64url(JSON.stringify(header))}.${base64url(JSON.stringify(full))}`;
   const key = await hmacKey(secret);
-  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(data));
-  return `${data}.${base64url(sig)}`;
+  const signature = await crypto.subtle.sign(
+    'HMAC',
+    key,
+    new TextEncoder().encode(data)
+  );
+  return `${data}.${base64url(signature)}`;
 }
 
 export async function verifyJwt(
@@ -63,13 +69,13 @@ export async function verifyJwt(
 ): Promise<JwtPayload | null> {
   const parts = token.split('.');
   if (parts.length !== 3) return null;
-  const [encHeader, encPayload, encSig] = parts;
+  const [encHeader, encPayload, encSignature] = parts;
   const data = `${encHeader}.${encPayload}`;
   const key = await hmacKey(secret);
   const valid = await crypto.subtle.verify(
     'HMAC',
     key,
-    base64urlDecode(encSig),
+    base64urlDecode(encSignature),
     new TextEncoder().encode(data)
   );
   if (!valid) return null;

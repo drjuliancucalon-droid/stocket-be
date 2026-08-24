@@ -1,93 +1,89 @@
 import { Hono } from 'hono';
 import { hash, compare } from 'bcryptjs';
+import type { Env, Vars } from '../db';
 import { signJwt } from '../auth';
-import { Env, Vars } from '../db';
 import { requireAuth } from '../middleware';
 
-const auth = new Hono<{ Bindings: Env; Variables: Vars }>();
+export const authRoutes = new Hono<{ Bindings: Env; Variables: Vars }>();
 
-// POST /auth/register — crea usuario + organización propia automáticamente
-auth.post('/register', async (c) => {
-  const body = await c.req.json<{ email: string; password: string; full_name: string; org_name?: string }>().catch(() => null);
-  if (!body?.email || !body?.password || !body?.full_name)
-    return c.json({ error: 'email, password y full_name son requeridos' }, 400);
+function authResponse(token: string, user: { id: string; full_name: string; email: string; role: string; org_id: string }) {
+  return {
+    access_token: token,
+    token_type: 'bearer',
+    user: { id: user.id, full_name: user.full_name, email: user.email, role: user.role, org_id: user.org_id },
+  };
+}
+
+// POST /auth/register — crea usuario + organización propia
+authRoutes.post('/register', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  if (!body?.email || !body?.password || !body?.full_name || !body?.org_name) {
+    return c.json({ detail: 'Campos requeridos: email, password, full_name, org_name' }, 400);
+  }
   if (body.password.length < 6)
-    return c.json({ error: 'La contraseña debe tener al menos 6 caracteres' }, 400);
+    return c.json({ detail: 'La contraseña debe tener al menos 6 caracteres' }, 400);
 
   const email = body.email.toLowerCase().trim();
   const existing = await c.env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
-  if (existing) return c.json({ error: 'El correo ya está registrado' }, 409);
+  if (existing) return c.json({ detail: 'El correo ya está registrado' }, 409);
 
-  const userId = crypto.randomUUID();
   const orgId = crypto.randomUUID();
-  const memberId = crypto.randomUUID();
+  const userId = crypto.randomUUID();
   const passwordHash = await hash(body.password, 10);
-  const orgName = body.org_name ?? `Org de ${body.full_name}`;
-  const slug = orgName.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') + '-' + orgId.slice(0, 6);
 
   await c.env.DB.batch([
-    c.env.DB.prepare('INSERT INTO users (id, full_name, email, password_hash) VALUES (?, ?, ?, ?)')
-      .bind(userId, body.full_name, email, passwordHash),
-    c.env.DB.prepare('INSERT INTO organizations (id, name, slug) VALUES (?, ?, ?)')
-      .bind(orgId, orgName, slug),
-    c.env.DB.prepare('INSERT INTO org_members (id, org_id, user_id, role) VALUES (?, ?, ?, ?)')
-      .bind(memberId, orgId, userId, 'owner'),
+    c.env.DB.prepare('INSERT INTO organizations (id, name) VALUES (?, ?)')
+      .bind(orgId, body.org_name.trim()),
+    c.env.DB.prepare(
+      'INSERT INTO users (id, organization_id, full_name, email, password_hash, role) VALUES (?, ?, ?, ?, ?, ?)'
+    ).bind(userId, orgId, body.full_name.trim(), email, passwordHash, 'admin'),
   ]);
 
   const token = await signJwt(
-    { sub: userId, email, org_id: orgId, org_role: 'owner', is_super_admin: false },
+    { sub: userId, email, org_id: orgId, org_role: 'admin', is_super_admin: false },
     c.env.JWT_SECRET
   );
-
-  return c.json({
-    access_token: token,
-    token_type: 'bearer',
-    user: { id: userId, email, full_name: body.full_name, org_id: orgId, org_role: 'owner' },
-  }, 201);
+  return c.json(authResponse(token, { id: userId, full_name: body.full_name, email, role: 'admin', org_id: orgId }), 201);
 });
 
 // POST /auth/login
-auth.post('/login', async (c) => {
+authRoutes.post('/login', async (c) => {
   const email = (c.req.query('email') || '').toLowerCase().trim();
   const password = c.req.query('password') || '';
-  if (!email || !password) return c.json({ detail: 'email y password son requeridos' }, 400);
+  if (!email || !password)
+    return c.json({ detail: 'email y password son requeridos' }, 400);
 
   const user = await c.env.DB.prepare(
-    'SELECT u.id, u.email, u.full_name, u.password_hash, u.is_super_admin, m.org_id, m.role FROM users u LEFT JOIN org_members m ON m.user_id = u.id ORDER BY m.created_at ASC LIMIT 1'
-  ).bind().first<{ id: string; email: string; full_name: string; password_hash: string; is_super_admin: number; org_id: string; role: string }>();
+    'SELECT id, full_name, email, password_hash, role, organization_id FROM users WHERE email = ?'
+  ).bind(email).first<{ id: string; full_name: string; email: string; password_hash: string; role: string; organization_id: string }>();
 
-  // timing-safe: siempre ejecuta compare aunque el usuario no exista
-  const dummyHash = '$2a$10$abcdefghijklmnopqrstuuABC123456789012345678901234567890';
-  const valid = user ? await compare(password, user.password_hash) : await compare(password, dummyHash).then(() => false);
-
-  if (!user || !valid) return c.json({ detail: 'Credenciales inválidas' }, 401);
+  if (!user) return c.json({ detail: 'Credenciales inválidas' }, 401);
+  const valid = await compare(password, user.password_hash);
+  if (!valid) return c.json({ detail: 'Credenciales inválidas' }, 401);
 
   const token = await signJwt(
-    {
-      sub: user.id,
-      email: user.email,
-      org_id: user.org_id,
-      org_role: user.role,
-      is_super_admin: user.is_super_admin === 1,
-    },
+    { sub: user.id, email: user.email, org_id: user.organization_id, org_role: user.role as 'admin' | 'member', is_super_admin: false },
     c.env.JWT_SECRET
   );
-
-  return c.json({
-    access_token: token,
-    token_type: 'bearer',
-    user: { id: user.id, email: user.email, full_name: user.full_name, org_id: user.org_id, org_role: user.role },
-  });
+  return c.json(authResponse(token, { id: user.id, full_name: user.full_name, email: user.email, role: user.role, org_id: user.organization_id }));
 });
 
 // GET /auth/me
-auth.get('/me', requireAuth, async (c) => {
-  const userId = c.get('userId');
+authRoutes.get('/me', requireAuth, async (c) => {
   const user = await c.env.DB.prepare(
-    'SELECT u.id, u.email, u.full_name, u.created_at, m.org_id, m.role, o.name as org_name FROM users u LEFT JOIN org_members m ON m.user_id = u.id LEFT JOIN organizations o ON o.id = m.org_id WHERE u.id = ?'
-  ).bind(userId).first();
+    'SELECT id, full_name, email, role, organization_id, created_at FROM users WHERE id = ?'
+  ).bind(c.get('userId')).first();
   if (!user) return c.json({ error: 'Usuario no encontrado' }, 404);
   return c.json(user);
 });
 
-export default auth;
+// GET /auth/users — lista usuarios de la organización (solo admin)
+authRoutes.get('/users', requireAuth, async (c) => {
+  const orgId = c.get('orgId');
+  const role = c.get('orgRole');
+  if (role !== 'admin') return c.json({ error: 'Acceso restringido' }, 403);
+  const { results } = await c.env.DB.prepare(
+    'SELECT id, full_name, email, role, created_at FROM users WHERE organization_id = ? ORDER BY created_at DESC'
+  ).bind(orgId).all();
+  return c.json(results);
+});

@@ -9,12 +9,12 @@
     "db:remote": "wrangler d1 execute stocket --remote --file=./schema.sql"
   },
   "dependencies": {
-    "hono": "^4.4.0",
-    "bcryptjs": "^2.4.3"
+    "bcryptjs": "^2.4.3",
+    "hono": "^4.4.0"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20240924.0",
-    "typescript": "^5.5.2",
-    "wrangler": "^3.78.0"
+    "@cloudflare/workers-types": "^4.20240725.0",
+    "typescript": "^5.5.3",
+    "wrangler": "^3.65.0"
   }
 }
