@@ -1,1 +1,3 @@
-JWT_SECRET=cambia-esto-por-una-clave-larga-y-aleatoria
+# Copia este archivo como .dev.vars y asigna un valor real
+# NO subas .dev.vars al repositorio (ya está en .gitignore)
+JWT_SECRET=cambia-esto-por-una-clave-larga-y-aleatoria-de-al-menos-32-caracteres

@@ -1,35 +1,25 @@
-# stocket-be v2 — Multi-tenant Inventory API
+# stocket-be
 
-Backend de Orbit Inventory, reescrito en arquitectura **multi-tenant** sobre Cloudflare Workers + D1.
-Cada organización ve únicamente sus propios productos y transacciones. El JWT incluye `org_id`, `org_role` e `is_super_admin`.
+Backend multi-tenant para Orbit Inventory — Hono + Cloudflare Workers + D1.
 
 ## Stack
 
-- **Runtime**: Cloudflare Workers (V8, sin Node.js)
-- **Framework**: [Hono](https://hono.dev) v4
-- **Base de datos**: Cloudflare D1 (SQLite gestionado)
-- **Auth**: JWT HS256 implementado con Web Crypto nativa
-- **Hash**: bcryptjs (implementación JS pura, sin módulos nativos)
-- **Costo**: 0 USD en plan gratuito de Cloudflare
+- **Runtime:** Cloudflare Workers (V8 isolates)
+- **Framework:** Hono v4
+- **Base de datos:** Cloudflare D1 (SQLite en el edge)
+- **Auth:** JWT HS256 con Web Crypto API (sin dependencias externas)
+- **Passwords:** bcryptjs (implementación 100% JS, compatible con Workers)
 
-## Diferencias con v1 (inventario-be)
+## Arquitectura Multi-Tenant
 
-| Aspecto | v1 | v2 (stocket-be) |
-|---|---|---|
-| Tenancy | Single-tenant | Multi-tenant por `org_id` |
-| JWT payload | `{sub, email}` | `{sub, email, org_id, org_role, is_super_admin}` |
-| Registro | Crea solo usuario | Crea usuario + organización (owner automático) |
-| Dashboard | `/dashboard/stats` (bug FE) | `/dashboard/metrics`, `/top-products`, `/recent-transactions` |
-| Stock update | 2 llamadas del FE (race condition) | `db.batch()` atómico en el BE |
-| Roles | Sin roles | `owner`, `admin`, `member` + middleware `requireAdmin` |
-| Tipo TX | `IN`, `OUT` | `IN`, `OUT`, `ADJUSTMENT` |
+Cada organización tiene su propio espacio de datos aislado por `organization_id`.
+El JWT incluye `org_id`, `org_role` e `is_super_admin` para control de acceso granular.
 
-## Setup local
+## Setup Local
 
 ```bash
 npm install
-cp .dev.vars.example .dev.vars  # edita JWT_SECRET
-npx wrangler d1 create stocket  # copia el database_id al wrangler.toml
+cp .dev.vars.example .dev.vars   # agrega JWT_SECRET
 npx wrangler d1 execute stocket --local --file=./schema.sql
 npx wrangler dev
 ```
@@ -37,6 +27,9 @@ npx wrangler dev
 ## Deploy
 
 ```bash
+npx wrangler login
+npx wrangler d1 create stocket
+# pega el database_id en wrangler.toml
 npx wrangler d1 execute stocket --remote --file=./schema.sql
 npx wrangler secret put JWT_SECRET
 npx wrangler deploy
@@ -45,22 +38,28 @@ npx wrangler deploy
 ## Endpoints
 
 | Método | Ruta | Auth | Descripción |
-|---|---|---|---|
-| GET | /health | No | Estado del servicio |
-| POST | /auth/register | No | Crea usuario + org, devuelve JWT |
-| POST | /auth/login | No | Login, devuelve JWT |
-| GET | /auth/me | Sí | Perfil + org del usuario |
+|--------|------|------|-------------|
+| POST | /auth/register | No | Crea usuario + organización, devuelve JWT |
+| POST | /auth/login | No | Devuelve JWT con org_id y rol |
+| GET | /auth/me | Sí | Perfil del usuario autenticado |
+| GET | /auth/users | Sí (admin) | Lista usuarios de la organización |
 | GET | /products | Sí | Lista productos de la org |
-| POST | /products | Sí | Crea producto |
-| GET | /products/:id | Sí | Detalle |
-| PUT | /products/:id | Sí | Actualización parcial |
-| DELETE | /products/:id | Sí | Elimina (falla si tiene transacciones) |
-| POST | /products/:id/transactions | Sí | Movimiento atómico (actualiza stock en batch) |
-| GET | /transactions | Sí | Historial (`?product_id=` opcional) |
-| GET | /dashboard/metrics | Sí | KPIs principales |
-| GET | /dashboard/top-products | Sí | Top 5 productos por movimiento |
-| GET | /dashboard/recent-transactions | Sí | Últimas 10 transacciones |
-| GET | /organizations/me | Sí | Info de la org |
-| GET | /organizations/me/members | Sí | Miembros |
-| POST | /organizations/me/members | Admin | Invitar usuario |
-| DELETE | /organizations/me/members/:userId | Admin | Remover miembro |
+| POST | /products | Sí | Crea producto en la org |
+| GET | /products/:id | Sí | Detalle de producto |
+| PUT | /products/:id | Sí | Actualiza producto |
+| DELETE | /products/:id | Sí | Elimina producto |
+| POST | /products/:id/transactions | Sí | Registra movimiento de stock |
+| GET | /transactions | Sí | Historial de movimientos |
+| GET | /dashboard/metrics | Sí | KPIs del panel |
+| GET | /dashboard/top-products | Sí | Top productos por movimiento |
+| GET | /dashboard/recent-transactions | Sí | Últimos movimientos |
+
+## Variables de Entorno
+
+| Variable | Descripción |
+|----------|-------------|
+| `JWT_SECRET` | Clave secreta para firmar JWT (usar `wrangler secret put`) |
+
+## Relacionado
+
+- Frontend: [orbit-inventory](https://github.com/drjuliancucalon-droid/orbit-inventory)
