@@ -3,6 +3,9 @@ main = "src/index.ts"
 compatibility_date = "2026-06-01"
 compatibility_flags = ["nodejs_compat"]
 
+# Enlace a la base de datos D1. "database_id" se reemplaza la primera vez que
+# se crea la base con `wrangler d1 create stocket` (o desde el dashboard de
+# Cloudflare: Almacenamiento y bases de datos -> D1 -> Crear base de datos).
 [[d1_databases]]
 binding = "DB"
 database_name = "stocket"

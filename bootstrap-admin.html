@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Crear super admin — stocket-be</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    max-width: 480px;
+    margin: 0 auto;
+    padding: 24px 20px 60px;
+    background: #f7f7f8;
+    color: #1a1a1a;
+  }
+  h1 { font-size: 1.25rem; margin-bottom: 4px; }
+  p.sub { color: #666; font-size: 0.9rem; margin-top: 0; margin-bottom: 24px; }
+  label { display: block; font-size: 0.85rem; font-weight: 600; margin: 16px 0 6px; }
+  input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 12px 14px;
+    font-size: 1rem;
+    border: 1px solid #ccc;
+    border-radius: 8px;
+    background: white;
+  }
+  button {
+    margin-top: 24px;
+    width: 100%;
+    padding: 14px;
+    font-size: 1rem;
+    font-weight: 600;
+    background: #d97757;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.6; }
+  #result {
+    margin-top: 20px;
+    padding: 14px;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+    display: none;
+  }
+  #result.ok { display: block; background: #e6f4ea; color: #1e4620; border: 1px solid #b7dfc0; }
+  #result.err { display: block; background: #fdecea; color: #611a15; border: 1px solid #f5c6c2; }
+  .hint { color: #888; font-size: 0.78rem; margin-top: 4px; }
+  code { background: #eee; padding: 1px 5px; border-radius: 4px; font-size: 0.85em; }
+</style>
+</head>
+<body>
+  <h1>Crear cuenta de super admin</h1>
+  <p class="sub">Se creará UNA sola vez, en <code>stocket-be</code>. Antes de tocar "Crear cuenta", asegúrate de haber pegado el código, agregado el binding D1 y guardado los dos secrets — si no, esto va a fallar porque el Worker aún no sabe conectarse a la base de datos.</p>
+
+  <label for="full_name">Nombre completo</label>
+  <input id="full_name" value="Julian Cucalon" autocomplete="name">
+
+  <label for="email">Correo</label>
+  <input id="email" type="email" value="dr.juliancucalon@gmail.com" autocomplete="email">
+
+  <label for="password">Contraseña (elige una nueva, mínimo 6 caracteres)</label>
+  <input id="password" type="password" autocomplete="new-password" placeholder="Tu contraseña de super admin">
+
+  <label for="secret">Bootstrap secret</label>
+  <input id="secret" value="a1388a9c5644ee650537649aa2eac7ea59d3ba900ed6bc148444f33f6832da08">
+  <p class="hint">Ya viene pre-llenado con el mismo valor que guardaste como secret <code>BOOTSTRAP_SECRET</code> en Cloudflare. No lo cambies a menos que hayas usado otro valor allá.</p>
+
+  <button id="submitBtn" onclick="createAdmin()">Crear cuenta de super admin</button>
+
+  <div id="result"></div>
+
+<script>
+async function createAdmin() {
+  const btn = document.getElementById('submitBtn');
+  const resultEl = document.getElementById('result');
+  const full_name = document.getElementById('full_name').value.trim();
+  const email = document.getElementById('email').value.trim();
+  const password = document.getElementById('password').value;
+  const secret = document.getElementById('secret').value.trim();
+
+  resultEl.className = '';
+  resultEl.style.display = 'none';
+
+  if (!full_name || !email || !password || !secret) {
+    resultEl.textContent = 'Completa todos los campos antes de continuar.';
+    resultEl.className = 'err';
+    return;
+  }
+  if (password.length < 6) {
+    resultEl.textContent = 'La contraseña debe tener al menos 6 caracteres.';
+    resultEl.className = 'err';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Creando...';
+
+  try {
+    const res = await fetch('https://stocket-be.dr-juliancucalon.workers.dev/auth/bootstrap-admin', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Bootstrap-Secret': secret,
+      },
+      body: JSON.stringify({ email, password, full_name }),
+    });
+    const data = await res.json().catch(() => ({}));
+
+    if (res.ok) {
+      resultEl.textContent =
+        '✅ Cuenta de super admin creada.\n\n' +
+        'Correo: ' + data.user.email + '\n' +
+        'Ya puedes cerrar esto e iniciar sesión normalmente en Orbit / stocket-be con ese correo y contraseña.';
+      resultEl.className = 'ok';
+      btn.textContent = 'Listo';
+    } else {
+      resultEl.textContent =
+        '❌ Error (HTTP ' + res.status + '): ' + (data.detail || 'sin detalle') + '\n\n' +
+        (res.status === 401
+          ? 'El bootstrap secret no coincide con el que guardaste en Cloudflare (Settings → Variables → BOOTSTRAP_SECRET).'
+          : res.status === 409
+          ? 'Ya existe una cuenta de super admin — esto solo puede correr una vez. Si necesitas otra, dile a Claude.'
+          : res.status === 0 || res.status >= 500
+          ? 'El Worker no respondió bien — probablemente falta el binding D1 (DB → stocket) o el código aún no está desplegado.'
+          : 'Revisa el mensaje de arriba.');
+      resultEl.className = 'err';
+      btn.disabled = false;
+      btn.textContent = 'Crear cuenta de super admin';
+    }
+  } catch (e) {
+    resultEl.textContent =
+      '❌ No se pudo contactar al Worker (' + e.message + ').\n\n' +
+      'Verifica que ya guardaste/desplegaste el código en Cloudflare y que tienes internet.';
+    resultEl.className = 'err';
+    btn.disabled = false;
+    btn.textContent = 'Crear cuenta de super admin';
+  }
+}
+</script>
+</body>
+</html>
