@@ -22,6 +22,8 @@ products.get("/", async (c) => {
 });
 
 // POST /products — crea un producto dentro del negocio de quien lo crea.
+// El stock inicial se puede pasar como 'quantity' en la creación.
+// Después de creado, el stock solo se modifica vía POST /transactions.
 products.post("/", async (c) => {
   if (!c.get("orgId")) return c.json({ detail: "Esta cuenta no pertenece a ningún negocio" }, 403);
   const body = await c.req
@@ -51,7 +53,10 @@ products.get("/:id", async (c) => {
   return c.json(product);
 });
 
-// PUT /products/:id — actualización parcial, solo dentro del propio negocio.
+// PUT /products/:id — actualización parcial de metadatos del producto.
+// IMPORTANTE: 'quantity' (stock) NO es editable aquí. El stock solo
+// puede cambiar a través de POST /transactions para garantizar
+// trazabilidad y auditoría completa de todos los movimientos.
 products.put("/:id", async (c) => {
   const id = c.req.param("id");
   const scope = orgScope(c);
@@ -61,22 +66,43 @@ products.put("/:id", async (c) => {
   if (!existing) return c.json({ detail: "Producto no encontrado" }, 404);
 
   const body = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
-  const editable = ["name", "description", "price", "quantity"] as const;
+
+  // 'quantity' está excluido intencionalmente: el stock solo cambia
+  // mediante transacciones (POST /transactions) para mantener auditoría.
+  const editable = ["name", "description", "price"] as const;
   const sets: string[] = [];
   const binds: unknown[] = [];
+
   for (const field of editable) {
     if (body[field] !== undefined) {
       sets.push(`${field} = ?`);
       binds.push(body[field]);
     }
   }
-  if (!sets.length) return c.json({ detail: "No enviaste ningún campo para actualizar" }, 400);
+
+  if (!sets.length) {
+    return c.json(
+      {
+        detail:
+          "No enviaste ningún campo editable. Recuerda: para cambiar el stock usa POST /transactions.",
+      },
+      400
+    );
+  }
+
   sets.push("updated_at = datetime('now')");
   binds.push(id);
 
   await c.env.DB.prepare(`UPDATE products SET ${sets.join(", ")} WHERE id = ?`).bind(...binds).run();
   const updated = await c.env.DB.prepare("SELECT * FROM products WHERE id = ?").bind(id).first();
-  return c.json(updated);
+
+  const response: Record<string, unknown> = { ...(updated as Record<string, unknown>) };
+  if (body["quantity"] !== undefined) {
+    response._warning =
+      "El campo 'quantity' fue ignorado. Para modificar el stock usa POST /transactions.";
+  }
+
+  return c.json(response);
 });
 
 // DELETE /products/:id
@@ -90,12 +116,13 @@ products.delete("/:id", async (c) => {
   try {
     await c.env.DB.prepare("DELETE FROM products WHERE id = ?").bind(id).run();
   } catch (err) {
-    // El producto tiene transacciones asociadas (FOREIGN KEY) — no se puede
-    // borrar sin perder ese historial.
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes("FOREIGN KEY")) {
       return c.json(
-        { detail: "No puedes eliminar este producto: tiene transacciones registradas. Márcalo como inactivo en vez de borrarlo, o borra primero sus transacciones." },
+        {
+          detail:
+            "No puedes eliminar este producto: tiene transacciones registradas. Márcalo como inactivo en vez de borrarlo, o borra primero sus transacciones.",
+        },
         409
       );
     }
