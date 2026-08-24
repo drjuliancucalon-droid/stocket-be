@@ -9,4 +9,4 @@ compatibility_flags = ["nodejs_compat"]
 [[d1_databases]]
 binding = "DB"
 database_name = "stocket"
-database_id = "REEMPLAZA-CON-TU-DATABASE-ID"
+database_id = "b8aa40ae-bd88-4d95-9fe0-2277ddb9f732"
