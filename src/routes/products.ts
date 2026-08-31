@@ -27,17 +27,38 @@ products.get("/", async (c) => {
 products.post("/", async (c) => {
   if (!c.get("orgId")) return c.json({ detail: "Esta cuenta no pertenece a ningún negocio" }, 403);
   const body = await c.req
-    .json<{ name?: string; description?: string; quantity?: number; price?: number }>()
+    .json<{
+      name?: string;
+      description?: string;
+      quantity?: number;
+      price?: number;
+      sku?: string;
+      cost_price?: number;
+      category?: string;
+      min_stock?: number;
+    }>()
     .catch(() => null);
   if (!body?.name || body.price === undefined || body.price === null) {
     return c.json({ detail: "name y price son obligatorios" }, 400);
   }
   const id = crypto.randomUUID();
   await c.env.DB.prepare(
-    `INSERT INTO products (id, organization_id, name, description, price, quantity, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO products (id, organization_id, name, sku, description, price, cost_price, category, quantity, min_stock, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
-    .bind(id, c.get("orgId"), body.name, body.description ?? null, body.price, body.quantity ?? 0, c.get("userId"))
+    .bind(
+      id,
+      c.get("orgId"),
+      body.name,
+      body.sku ?? null,
+      body.description ?? null,
+      body.price,
+      body.cost_price ?? 0,
+      body.category ?? null,
+      body.quantity ?? 0,
+      body.min_stock ?? 5,
+      c.get("userId")
+    )
     .run();
   const created = await c.env.DB.prepare("SELECT * FROM products WHERE id = ?").bind(id).first();
   return c.json(created, 201);
@@ -69,7 +90,7 @@ products.put("/:id", async (c) => {
 
   // 'quantity' está excluido intencionalmente: el stock solo cambia
   // mediante transacciones (POST /transactions) para mantener auditoría.
-  const editable = ["name", "description", "price"] as const;
+  const editable = ["name", "sku", "description", "price", "cost_price", "category", "min_stock"] as const;
   const sets: string[] = [];
   const binds: unknown[] = [];
 
